@@ -51,8 +51,8 @@ private:
 };
 
 
-// We need an intermediate "deferred" type because when constructing a
-// Deferred we won't always know the underlying function type (for
+// We need an intermeidate "deferred" type because when constructing a
+// `Deferred` we won't always know the underlying function type (for
 // example, if we're being passed a std::bind or a lambda). A lambda
 // won't always implicitly convert to a std::function so instead we
 // hold onto the functor type F and let the compiler invoke the
@@ -236,9 +236,11 @@ private:
             ENUM_PARAMS(N, typename P),                                 \
             ENUM_PARAMS(N, typename A)>                                 \
   friend auto defer(const PID<T>& pid,                                  \
-             void (T::*method)(ENUM_PARAMS(N, P)),                      \
-             ENUM_BINARY_PARAMS(N, A, a))                               \
-    -> _Deferred<decltype(std::bind(&std::function<void(ENUM_PARAMS(N, P))>::operator(), std::function<void(ENUM_PARAMS(N, P))>(), ENUM_PARAMS(N, a)))>; // NOLINT(whitespace/line_length)
+                    void (T::*method)(ENUM_PARAMS(N, P)),               \
+                    ENUM_BINARY_PARAMS(N, A, a))                        \
+    -> _Deferred<decltype(std::bind(                                    \
+           std::function<void(ENUM_PARAMS(N, P))>(),                    \
+           ENUM_PARAMS(N, a)))>;
 
   REPEAT_FROM_TO(1, 12, TEMPLATE, _) // Args A0 -> A10.
 #undef TEMPLATE
@@ -249,9 +251,11 @@ private:
             ENUM_PARAMS(N, typename P),                                 \
             ENUM_PARAMS(N, typename A)>                                 \
   friend auto defer(const PID<T>& pid,                                  \
-             Future<R> (T::*method)(ENUM_PARAMS(N, P)),                 \
-             ENUM_BINARY_PARAMS(N, A, a))                               \
-    -> _Deferred<decltype(std::bind(&std::function<Future<R>(ENUM_PARAMS(N, P))>::operator(), std::function<Future<R>(ENUM_PARAMS(N, P))>(), ENUM_PARAMS(N, a)))>; // NOLINT(whitespace/line_length)
+                    Future<R> (T::*method)(ENUM_PARAMS(N, P)),          \
+                    ENUM_BINARY_PARAMS(N, A, a))                        \
+    -> _Deferred<decltype(std::bind(                                    \
+           std::function<Future<R>(ENUM_PARAMS(N, P))>(),               \
+           ENUM_PARAMS(N, a)))>;
 
   REPEAT_FROM_TO(1, 12, TEMPLATE, _) // Args A0 -> A10.
 #undef TEMPLATE
@@ -262,9 +266,11 @@ private:
             ENUM_PARAMS(N, typename P),                                 \
             ENUM_PARAMS(N, typename A)>                                 \
   friend auto defer(const PID<T>& pid,                                  \
-             R (T::*method)(ENUM_PARAMS(N, P)),                         \
-             ENUM_BINARY_PARAMS(N, A, a))                               \
-    -> _Deferred<decltype(std::bind(&std::function<Future<R>(ENUM_PARAMS(N, P))>::operator(), std::function<Future<R>(ENUM_PARAMS(N, P))>(), ENUM_PARAMS(N, a)))>; // NOLINT(whitespace/line_length)
+                    R (T::*method)(ENUM_PARAMS(N, P)),                  \
+                    ENUM_BINARY_PARAMS(N, A, a))                        \
+    -> _Deferred<decltype(std::bind(                                    \
+           std::function<Future<R>(ENUM_PARAMS(N, P))>(),               \
+           ENUM_PARAMS(N, a)))>;
 
   REPEAT_FROM_TO(1, 12, TEMPLATE, _) // Args A0 -> A10.
 #undef TEMPLATE
