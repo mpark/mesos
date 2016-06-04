@@ -503,8 +503,7 @@ void Slave::initialize()
 
   LOG(INFO) << "Agent hostname: " << info.hostname();
 
-  statusUpdateManager->initialize(defer(self(), &Slave::forward, lambda::_1)
-    .operator std::function<void(StatusUpdate)>());
+  statusUpdateManager->initialize(defer(self(), &Slave::forward, lambda::_1));
 
   // We pause the status update manager so that it doesn't forward any updates
   // while the slave is still recovering. It is unpaused/resumed when the slave
@@ -725,8 +724,8 @@ void Slave::initialize()
       << " Please run the agent with '--help' to see the valid options";
   }
 
-  auto signalHandler = defer(self(), &Slave::signaled, lambda::_1, lambda::_2)
-    .operator std::function<void(int, int)>();
+  std::function<void (int, int)> signalHandler =
+    defer(self(), &Slave::signaled, lambda::_1, lambda::_2);
 
 #ifdef __WINDOWS__
   if (!os::internal::installCtrlHandler(&signalHandler)) {
