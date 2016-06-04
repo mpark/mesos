@@ -239,20 +239,20 @@ Deferred<Future<R>()> defer(const Process<T>* process, R (T::*method)())
 // Now we define defer calls for functors (with and without a PID):
 
 template <typename F>
-_Deferred<F> defer(const UPID& pid, F&& f)
+_Deferred<F> defer(const UPID& pid, F f)
 {
-  return _Deferred<F>(pid, std::forward<F>(f));
+  return _Deferred<F>(pid, std::move(f));
 }
 
 
 template <typename F>
-_Deferred<F> defer(F&& f)
+_Deferred<F> defer(F f)
 {
   if (__process__ != nullptr) {
-    return defer(__process__->self(), std::forward<F>(f));
+    return defer(__process__->self(), std::move(f));
   }
 
-  return __executor__->defer(std::forward<F>(f));
+  return __executor__->defer(std::move(f));
 }
 
 } // namespace process {

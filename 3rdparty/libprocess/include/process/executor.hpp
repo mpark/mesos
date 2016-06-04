@@ -50,9 +50,9 @@ public:
   }
 
   template <typename F>
-  _Deferred<F> defer(F&& f)
+  _Deferred<F> defer(F f)
   {
-    return _Deferred<F>(process.self(), std::forward<F>(f));
+    return _Deferred<F>(process.self(), std::move(f));
   }
 
 
