@@ -25,6 +25,8 @@
 #include <boost/preprocessor/repetition/repeat.hpp>
 #include <boost/preprocessor/repetition/repeat_from_to.hpp>
 
+#include <boost/preprocessor/tuple/elem.hpp>
+
 // Provides aliases to a bunch of preprocessor macros useful for
 // creating template definitions that have varying number of
 // parameters (should be removable with C++-11 variadic templates).
@@ -37,5 +39,6 @@
 #define ENUM_TRAILING_PARAMS BOOST_PP_ENUM_TRAILING_PARAMS
 #define REPEAT BOOST_PP_REPEAT
 #define REPEAT_FROM_TO BOOST_PP_REPEAT_FROM_TO
+#define TUPLE_ELEM BOOST_PP_TUPLE_ELEM
 
 #endif // __STOUT_PREPROCESSOR_HPP__
