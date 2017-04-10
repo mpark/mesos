@@ -102,6 +102,7 @@ using std::vector;
 
 using testing::_;
 using testing::Assign;
+using testing::Const;
 using testing::DoAll;
 using testing::Return;
 using testing::ReturnArg;
@@ -152,6 +153,12 @@ public:
   MOCK_METHOD1(func2, Future<bool>(bool));
   MOCK_METHOD1(func3, int(int));
   MOCK_METHOD2(func4, Future<bool>(bool, int));
+
+  MOCK_CONST_METHOD0(func5, void());
+  MOCK_CONST_METHOD1(func6, bool(bool));
+  MOCK_CONST_METHOD1(func7, Future<bool>(bool));
+  MOCK_CONST_METHOD1(func8, int(int));
+  MOCK_CONST_METHOD2(func9, Future<bool>(bool, int));
 };
 
 
@@ -167,11 +174,21 @@ TEST(ProcessTest, THREADSAFE_Dispatch)
   EXPECT_CALL(process, func2(_))
     .WillOnce(ReturnArg<0>());
 
+  EXPECT_CALL(process, func5());
+
+  EXPECT_CALL(process, func6(_))
+    .WillOnce(ReturnArg<0>());
+
+  EXPECT_CALL(process, func7(_))
+    .WillOnce(ReturnArg<0>());
+
   PID<DispatchProcess> pid = spawn(&process);
 
   ASSERT_FALSE(!pid);
 
   dispatch(pid, &DispatchProcess::func0);
+  dispatch(pid, &DispatchProcess::func5);
+  dispatch(pid, []() mutable {});
   dispatch(pid, []() {});
 
   Future<bool> future;
@@ -181,6 +198,14 @@ TEST(ProcessTest, THREADSAFE_Dispatch)
   EXPECT_TRUE(future.get());
 
   future = dispatch(pid, &DispatchProcess::func2, true);
+
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(pid, &DispatchProcess::func6, true);
+
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(pid, &DispatchProcess::func7, true);
 
   EXPECT_TRUE(future.get());
 
@@ -194,12 +219,28 @@ TEST(ProcessTest, THREADSAFE_Dispatch)
 
   EXPECT_TRUE(future.get());
 
+  future = dispatch(
+      pid, std::bind([](bool b) mutable -> bool { return b; }, true));
+
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(
+      pid, std::bind([](bool b) mutable -> Future<bool> { return b; }, true));
+
+  EXPECT_TRUE(future.get());
+
   bool b = true;
 
   future = dispatch(pid, [b]() -> bool { return b; });
   EXPECT_TRUE(future.get());
 
   future = dispatch(pid, [b]() -> Future<bool> { return b; });
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(pid, [b]() mutable -> bool { return b; });
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(pid, [b]() mutable -> Future<bool> { return b; });
   EXPECT_TRUE(future.get());
 
   terminate(pid);
@@ -222,6 +263,17 @@ TEST(ProcessTest, THREADSAFE_Defer1)
   EXPECT_CALL(process, func4(_, _))
     .WillRepeatedly(ReturnArg<0>());
 
+  EXPECT_CALL(Const(process), func5());
+
+  EXPECT_CALL(Const(process), func6(_))
+    .WillOnce(ReturnArg<0>());
+
+  EXPECT_CALL(Const(process), func7(_))
+    .WillOnce(ReturnArg<0>());
+
+  EXPECT_CALL(Const(process), func9(_, _))
+    .WillRepeatedly(ReturnArg<0>());
+
   PID<DispatchProcess> pid = spawn(&process);
 
   ASSERT_FALSE(!pid);
@@ -230,6 +282,12 @@ TEST(ProcessTest, THREADSAFE_Defer1)
     Deferred<void()> func0 =
       defer(pid, &DispatchProcess::func0);
     func0();
+  }
+
+  {
+    Deferred<void()> func5 =
+      defer(pid, &DispatchProcess::func5);
+    func5();
   }
 
   Future<bool> future;
@@ -269,7 +327,40 @@ TEST(ProcessTest, THREADSAFE_Defer1)
     EXPECT_TRUE(future.get());
   }
 
-  // Only take const &!
+  {
+    Deferred<Future<bool>()> func6 =
+      defer(pid, &DispatchProcess::func6, true);
+    future = func6();
+    EXPECT_TRUE(future.get());
+  }
+
+  {
+    Deferred<Future<bool>()> func7 =
+      defer(pid, &DispatchProcess::func7, true);
+    future = func7();
+    EXPECT_TRUE(future.get());
+  }
+
+  {
+    Deferred<Future<bool>()> func9 =
+      defer(pid, &DispatchProcess::func9, true, 42);
+    future = func9();
+    EXPECT_TRUE(future.get());
+  }
+
+  {
+    Deferred<Future<bool>(bool)> func9 =
+      defer(pid, &DispatchProcess::func9, lambda::_1, 42);
+    future = func9(false);
+    EXPECT_FALSE(future.get());
+  }
+
+  {
+    Deferred<Future<bool>(int)> func9 =
+      defer(pid, &DispatchProcess::func9, true, lambda::_1);
+    future = func9(42);
+    EXPECT_TRUE(future.get());
+  }
 
   terminate(pid);
   wait(pid);
@@ -289,6 +380,16 @@ public:
     return f.then(defer(self(), &Self::_func2));
   }
 
+  Future<string> func3(const Future<int>& f) const
+  {
+    return f.then(defer(self(), &Self::_func1, lambda::_1));
+  }
+
+  Future<string> func4(const Future<int>& f) const
+  {
+    return f.then(defer(self(), &Self::_func2));
+  }
+
 private:
   Future<string> _func1(int i)
   {
@@ -296,6 +397,16 @@ private:
   }
 
   Future<string> _func2()
+  {
+    return string("42");
+  }
+
+  Future<string> _func3(int i) const
+  {
+    return stringify(i);
+  }
+
+  Future<string> _func4() const
   {
     return string("42");
   }
@@ -308,7 +419,9 @@ TEST(ProcessTest, THREADSAFE_Defer2)
 
   PID<DeferProcess> pid = spawn(process);
 
-  Future<string> f = dispatch(pid, &DeferProcess::func1, 41);
+  Future<string> f;
+
+  f = dispatch(pid, &DeferProcess::func1, 41);
 
   f.await();
 
@@ -316,6 +429,20 @@ TEST(ProcessTest, THREADSAFE_Defer2)
   EXPECT_EQ("41", f.get());
 
   f = dispatch(pid, &DeferProcess::func2, 41);
+
+  f.await();
+
+  ASSERT_TRUE(f.isReady());
+  EXPECT_EQ("42", f.get());
+
+  f = dispatch(pid, &DeferProcess::func3, 41);
+
+  f.await();
+
+  ASSERT_TRUE(f.isReady());
+  EXPECT_EQ("41", f.get());
+
+  f = dispatch(pid, &DeferProcess::func4, 41);
 
   f.await();
 
