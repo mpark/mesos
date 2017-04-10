@@ -67,74 +67,50 @@ void dispatch(
     const Option<const std::type_info*>& functionType = None());
 
 
-// NOTE: This struct is used by the public `dispatch(const UPID& pid, F&& f)`
-// function. See comments there for the reason why we need this.
-template <typename R>
-struct Dispatch;
-
-
-// Partial specialization for callable objects returning `void` to be dispatched
-// on a process.
-// NOTE: This struct is used by the public `dispatch(const UPID& pid, F&& f)`
-// function. See comments there for the reason why we need this.
-template <>
-struct Dispatch<void>
-{
-  template <typename F>
-  void operator()(const UPID& pid, F&& f)
-  {
-    std::shared_ptr<std::function<void(ProcessBase*)>> f_(
-        new std::function<void(ProcessBase*)>(
-            [=](ProcessBase*) {
-              f();
-            }));
-
-    internal::dispatch(pid, f_);
-  }
-};
-
-
-// Partial specialization for callable objects returning `Future<R>` to be
-// dispatched on a process.
-// NOTE: This struct is used by the public `dispatch(const UPID& pid, F&& f)`
-// function. See comments there for the reason why we need this.
-template <typename R>
-struct Dispatch<Future<R>>
-{
-  template <typename F>
-  Future<R> operator()(const UPID& pid, F&& f)
-  {
-    std::shared_ptr<Promise<R>> promise(new Promise<R>());
-
-    std::shared_ptr<std::function<void(ProcessBase*)>> f_(
-        new std::function<void(ProcessBase*)>(
-            [=](ProcessBase*) {
-              promise->associate(f());
-            }));
-
-    internal::dispatch(pid, f_);
-
-    return promise->future();
-  }
-};
-
-
-// Dispatches a callable object returning `R` on a process.
-// NOTE: This struct is used by the public `dispatch(const UPID& pid, F&& f)`
-// function. See comments there for the reason why we need this.
 template <typename R>
 struct Dispatch
 {
-  template <typename F>
-  Future<R> operator()(const UPID& pid, F&& f)
-  {
-    std::shared_ptr<Promise<R>> promise(new Promise<R>());
+  using Wrapped = typename wrap<R>::type;
+  using Unwrapped = typename unwrap<R>::type;
 
-    std::shared_ptr<std::function<void(ProcessBase*)>> f_(
-        new std::function<void(ProcessBase*)>(
-            [=](ProcessBase*) {
-              promise->set(f());
-            }));
+  template <typename T, typename F>
+  struct Invoke
+  {
+    F T::*method;
+    std::shared_ptr<Promise<Unwrapped>> promise;
+
+    template <typename... Args>
+    void operator()(ProcessBase* process, Args&&... args) const
+    {
+      assert(process != nullptr);
+      T* t = dynamic_cast<T*>(process);
+      assert(t != nullptr);
+      promise->set((t->*method)(std::forward<Args>(args)...));
+    }
+  };
+
+  template <typename T, typename F, typename... Args>
+  static Wrapped dispatch(const PID<T>& pid, F T::*method, Args&&... args)
+  {
+    auto promise = std::make_shared<Promise<Unwrapped>>();
+
+    auto f = std::make_shared<std::function<void(ProcessBase*)>>(std::bind(
+        Invoke<T, F>{method, promise},
+        lambda::_1,
+        std::forward<Args>(args)...));
+
+    internal::dispatch(pid, f, &typeid(method));
+
+    return promise->future();
+  }
+
+  template <typename F>
+  static Wrapped dispatch(const UPID& pid, F&& f)
+  {
+    auto promise = std::make_shared<Promise<Unwrapped>>();
+
+    auto f_ = std::make_shared<std::function<void(ProcessBase*)>>(
+        [=](ProcessBase*) mutable { promise->set(f()); });
 
     internal::dispatch(pid, f_);
 
@@ -142,266 +118,101 @@ struct Dispatch
   }
 };
 
+template <>
+struct Dispatch<void>
+{
+  template <typename T, typename F>
+  struct Invoke
+  {
+    F T::*method;
+
+    template <typename... Args>
+    void operator()(ProcessBase* process, Args&&... args) const
+    {
+      assert(process != nullptr);
+      T* t = dynamic_cast<T*>(process);
+      assert(t != nullptr);
+      (t->*method)(std::forward<Args>(args)...);
+    }
+  };
+
+  template <typename T, typename F, typename... Args>
+  static void dispatch(const PID<T>& pid, F T::*method, Args&&... args)
+  {
+    auto f = std::make_shared<std::function<void(ProcessBase*)>>(std::bind(
+        Invoke<T, F>{method}, lambda::_1, std::forward<Args>(args)...));
+
+    internal::dispatch(pid, f, &typeid(method));
+  }
+
+  template <typename F>
+  static void dispatch(const UPID& pid, F&& f)
+  {
+    auto f_ = std::make_shared<std::function<void(ProcessBase*)>>(
+        [=](ProcessBase*) mutable { f(); });
+
+    internal::dispatch(pid, f_);
+  }
+};
+
+template <typename R, typename T, typename F, typename... Args>
+auto dispatch(const PID<T>& pid, F T::*method, Args&&... args)
+  -> decltype(Dispatch<R>::dispatch(pid, method, std::forward<Args>(args)...))
+{
+  return Dispatch<R>::dispatch(pid, method, std::forward<Args>(args)...);
+}
+
+
+template <typename R, typename T, typename F, typename... Args>
+auto dispatch(const Process<T>& process, F T::*method, Args&&... args)
+  -> decltype(dispatch<R>(process.self(), method, std::forward<Args>(args)...))
+{
+  return dispatch<R>(process.self(), method, std::forward<Args>(args)...);
+}
+
+
+template <typename R, typename T, typename F, typename... Args>
+auto dispatch(const Process<T>* process, F T::*method, Args&&... args)
+  -> decltype(dispatch<R>(process->self(), method, std::forward<Args>(args)...))
+{
+  return dispatch<R>(process->self(), method, std::forward<Args>(args)...);
+}
+
 } // namespace internal {
 
+#define PARAM(Z, N, P) \
+  , CAT(TUPLE_ELEM(2, 0, P), N)&& CAT(TUPLE_ELEM(2, 1, P), N)
 
-// Okay, now for the definition of the dispatch routines
-// themselves. For each routine we provide the version in C++11 using
-// variadic templates so the reader can see what the Boost
-// preprocessor macros are effectively providing. Using C++11 closures
-// would shorten these definitions even more.
-//
-// First, definitions of dispatch for methods returning void:
+#define FORWARD(Z, N, P) \
+  , std::forward<CAT(TUPLE_ELEM(2, 0, P), N)>(CAT(TUPLE_ELEM(2, 1, P), N))
 
-template <typename T>
-void dispatch(const PID<T>& pid, void (T::*method)())
-{
-  std::shared_ptr<std::function<void(ProcessBase*)>> f(
-      new std::function<void(ProcessBase*)>(
-          [=](ProcessBase* process) {
-            assert(process != nullptr);
-            T* t = dynamic_cast<T*>(process);
-            assert(t != nullptr);
-            (t->*method)();
-          }));
-
-  internal::dispatch(pid, f, &typeid(method));
-}
-
-template <typename T>
-void dispatch(const Process<T>& process, void (T::*method)())
-{
-  dispatch(process.self(), method);
-}
-
-template <typename T>
-void dispatch(const Process<T>* process, void (T::*method)())
-{
-  dispatch(process->self(), method);
-}
-
-// Due to a bug (http://gcc.gnu.org/bugzilla/show_bug.cgi?id=41933)
-// with variadic templates and lambdas, we still need to do
-// preprocessor expansions.
-#define TEMPLATE(Z, N, DATA)                                            \
-  template <typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  void dispatch(                                                        \
-      const PID<T>& pid,                                                \
-      void (T::*method)(ENUM_PARAMS(N, P)),                             \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    std::shared_ptr<std::function<void(ProcessBase*)>> f(               \
-        new std::function<void(ProcessBase*)>(                          \
-            [=](ProcessBase* process) {                                 \
-              assert(process != nullptr);                               \
-              T* t = dynamic_cast<T*>(process);                         \
-              assert(t != nullptr);                                     \
-              (t->*method)(ENUM_PARAMS(N, a));                          \
-            }));                                                        \
-                                                                        \
-    internal::dispatch(pid, f, &typeid(method));                        \
-  }                                                                     \
-                                                                        \
-  template <typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  void dispatch(                                                        \
-      const Process<T>& process,                                        \
-      void (T::*method)(ENUM_PARAMS(N, P)),                             \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    dispatch(process.self(), method, ENUM_PARAMS(N, a));                \
-  }                                                                     \
-                                                                        \
-  template <typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  void dispatch(                                                        \
-      const Process<T>* process,                                        \
-      void (T::*method)(ENUM_PARAMS(N, P)),                             \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    dispatch(process->self(), method, ENUM_PARAMS(N, a));               \
+#define DISPATCH(Z, N, QUALS)                                                 \
+  template <                                                                  \
+      typename Process,                                                       \
+      typename R,                                                             \
+      typename T                                                              \
+      ENUM_TRAILING_PARAMS(N, typename P)                                     \
+      ENUM_TRAILING_PARAMS(N, typename A)>                                    \
+  auto dispatch(                                                              \
+      const Process& process,                                                 \
+      R (T::*method)(ENUM_PARAMS(N, P)) QUALS                                 \
+      REPEAT(N, PARAM, (A, a)))                                               \
+    -> decltype(                                                              \
+        internal::dispatch<R>(process, method REPEAT(N, FORWARD, (A, a))))    \
+  {                                                                           \
+    return internal::dispatch<R>(process, method REPEAT(N, FORWARD, (A, a))); \
   }
 
-  REPEAT_FROM_TO(1, 12, TEMPLATE, _) // Args A0 -> A10.
-#undef TEMPLATE
+REPEAT(12, DISPATCH, )
+REPEAT(12, DISPATCH, const)
+REPEAT(12, DISPATCH, &)
+REPEAT(12, DISPATCH, const &)
+REPEAT(12, DISPATCH, &&)
+REPEAT(12, DISPATCH, const &&)
 
-
-// Next, definitions of methods returning a future:
-
-template <typename R, typename T>
-Future<R> dispatch(const PID<T>& pid, Future<R> (T::*method)())
-{
-  std::shared_ptr<Promise<R>> promise(new Promise<R>());
-
-  std::shared_ptr<std::function<void(ProcessBase*)>> f(
-      new std::function<void(ProcessBase*)>(
-          [=](ProcessBase* process) {
-            assert(process != nullptr);
-            T* t = dynamic_cast<T*>(process);
-            assert(t != nullptr);
-            promise->associate((t->*method)());
-          }));
-
-  internal::dispatch(pid, f, &typeid(method));
-
-  return promise->future();
-}
-
-template <typename R, typename T>
-Future<R> dispatch(const Process<T>& process, Future<R> (T::*method)())
-{
-  return dispatch(process.self(), method);
-}
-
-template <typename R, typename T>
-Future<R> dispatch(const Process<T>* process, Future<R> (T::*method)())
-{
-  return dispatch(process->self(), method);
-}
-
-#define TEMPLATE(Z, N, DATA)                                            \
-  template <typename R,                                                 \
-            typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  Future<R> dispatch(                                                   \
-      const PID<T>& pid,                                                \
-      Future<R> (T::*method)(ENUM_PARAMS(N, P)),                        \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    std::shared_ptr<Promise<R>> promise(new Promise<R>());              \
-                                                                        \
-    std::shared_ptr<std::function<void(ProcessBase*)>> f(               \
-        new std::function<void(ProcessBase*)>(                          \
-            [=](ProcessBase* process) {                                 \
-              assert(process != nullptr);                               \
-              T* t = dynamic_cast<T*>(process);                         \
-              assert(t != nullptr);                                     \
-              promise->associate((t->*method)(ENUM_PARAMS(N, a)));      \
-            }));                                                        \
-                                                                        \
-    internal::dispatch(pid, f, &typeid(method));                        \
-                                                                        \
-    return promise->future();                                           \
-  }                                                                     \
-                                                                        \
-  template <typename R,                                                 \
-            typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  Future<R> dispatch(                                                   \
-      const Process<T>& process,                                        \
-      Future<R> (T::*method)(ENUM_PARAMS(N, P)),                        \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    return dispatch(process.self(), method, ENUM_PARAMS(N, a));         \
-  }                                                                     \
-                                                                        \
-  template <typename R,                                                 \
-            typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  Future<R> dispatch(                                                   \
-      const Process<T>* process,                                        \
-      Future<R> (T::*method)(ENUM_PARAMS(N, P)),                        \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    return dispatch(process->self(), method, ENUM_PARAMS(N, a));        \
-  }
-
-  REPEAT_FROM_TO(1, 12, TEMPLATE, _) // Args A0 -> A10.
-#undef TEMPLATE
-
-
-// Next, definitions of methods returning a value.
-
-template <typename R, typename T>
-Future<R> dispatch(const PID<T>& pid, R (T::*method)())
-{
-  std::shared_ptr<Promise<R>> promise(new Promise<R>());
-
-  std::shared_ptr<std::function<void(ProcessBase*)>> f(
-      new std::function<void(ProcessBase*)>(
-          [=](ProcessBase* process) {
-            assert(process != nullptr);
-            T* t = dynamic_cast<T*>(process);
-            assert(t != nullptr);
-            promise->set((t->*method)());
-          }));
-
-  internal::dispatch(pid, f, &typeid(method));
-
-  return promise->future();
-}
-
-template <typename R, typename T>
-Future<R> dispatch(const Process<T>& process, R (T::*method)())
-{
-  return dispatch(process.self(), method);
-}
-
-template <typename R, typename T>
-Future<R> dispatch(const Process<T>* process, R (T::*method)())
-{
-  return dispatch(process->self(), method);
-}
-
-#define TEMPLATE(Z, N, DATA)                                            \
-  template <typename R,                                                 \
-            typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  Future<R> dispatch(                                                   \
-      const PID<T>& pid,                                                \
-      R (T::*method)(ENUM_PARAMS(N, P)),                                \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    std::shared_ptr<Promise<R>> promise(new Promise<R>());              \
-                                                                        \
-    std::shared_ptr<std::function<void(ProcessBase*)>> f(               \
-        new std::function<void(ProcessBase*)>(                          \
-            [=](ProcessBase* process) {                                 \
-              assert(process != nullptr);                               \
-              T* t = dynamic_cast<T*>(process);                         \
-              assert(t != nullptr);                                     \
-              promise->set((t->*method)(ENUM_PARAMS(N, a)));            \
-            }));                                                        \
-                                                                        \
-    internal::dispatch(pid, f, &typeid(method));                        \
-                                                                        \
-    return promise->future();                                           \
-  }                                                                     \
-                                                                        \
-  template <typename R,                                                 \
-            typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  Future<R> dispatch(                                                   \
-      const Process<T>& process,                                        \
-      R (T::*method)(ENUM_PARAMS(N, P)),                                \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    return dispatch(process.self(), method, ENUM_PARAMS(N, a));         \
-  }                                                                     \
-                                                                        \
-  template <typename R,                                                 \
-            typename T,                                                 \
-            ENUM_PARAMS(N, typename P),                                 \
-            ENUM_PARAMS(N, typename A)>                                 \
-  Future<R> dispatch(                                                   \
-      const Process<T>* process,                                        \
-      R (T::*method)(ENUM_PARAMS(N, P)),                                \
-      ENUM_BINARY_PARAMS(N, A, a))                                      \
-  {                                                                     \
-    return dispatch(process->self(), method, ENUM_PARAMS(N, a));        \
-  }
-
-  REPEAT_FROM_TO(1, 12, TEMPLATE, _) // Args A0 -> A10.
-#undef TEMPLATE
+#undef DEFER
+#undef FORWARD
+#undef PARAM
 
 
 // We use partial specialization of
@@ -411,9 +222,9 @@ Future<R> dispatch(const Process<T>* process, R (T::*method)())
 // in order to determine whether R is void, Future or other types.
 template <typename F, typename R = typename result_of<F()>::type>
 auto dispatch(const UPID& pid, F&& f)
-  -> decltype(internal::Dispatch<R>()(pid, std::forward<F>(f)))
+  -> decltype(internal::Dispatch<R>::dispatch(pid, std::forward<F>(f)))
 {
-  return internal::Dispatch<R>()(pid, std::forward<F>(f));
+  return internal::Dispatch<R>::dispatch(pid, std::forward<F>(f));
 }
 
 } // namespace process {
