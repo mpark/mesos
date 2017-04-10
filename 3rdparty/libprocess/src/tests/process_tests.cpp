@@ -172,6 +172,7 @@ TEST(ProcessTest, THREADSAFE_Dispatch)
   ASSERT_FALSE(!pid);
 
   dispatch(pid, &DispatchProcess::func0);
+  dispatch(pid, []() {});
 
   Future<bool> future;
 
@@ -181,6 +182,24 @@ TEST(ProcessTest, THREADSAFE_Dispatch)
 
   future = dispatch(pid, &DispatchProcess::func2, true);
 
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(
+      pid, std::bind([](bool b) -> bool { return b; }, true));
+
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(
+      pid, std::bind([](bool b) -> Future<bool> { return b; }, true));
+
+  EXPECT_TRUE(future.get());
+
+  bool b = true;
+
+  future = dispatch(pid, [b]() -> bool { return b; });
+  EXPECT_TRUE(future.get());
+
+  future = dispatch(pid, [b]() -> Future<bool> { return b; });
   EXPECT_TRUE(future.get());
 
   terminate(pid);
