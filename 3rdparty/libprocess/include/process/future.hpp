@@ -175,32 +175,31 @@ public:
   template <typename F>
   const Future<T>& onDiscard(_Deferred<F>&& deferred) const
   {
-    return onDiscard(deferred.operator std::function<void()>());
+    return onDiscard(DiscardCallback(std::move(deferred)));
   }
 
   template <typename F>
   const Future<T>& onReady(_Deferred<F>&& deferred) const
   {
-    return onReady(deferred.operator std::function<void(const T&)>());
+    return onReady(ReadyCallback(std::move(deferred)));
   }
 
   template <typename F>
   const Future<T>& onFailed(_Deferred<F>&& deferred) const
   {
-    return onFailed(
-        deferred.operator std::function<void(const std::string&)>());
+    return onFailed(FailedCallback(std::move(deferred)));
   }
 
   template <typename F>
   const Future<T>& onDiscarded(_Deferred<F>&& deferred) const
   {
-    return onDiscarded(deferred.operator std::function<void()>());
+    return onDiscarded(DiscardedCallback(std::move(deferred)));
   }
 
   template <typename F>
   const Future<T>& onAny(_Deferred<F>&& deferred) const
   {
-    return onAny(deferred.operator std::function<void(const Future<T>&)>());
+    return onAny(AnyCallback(std::move(deferred)));
   }
 
 private:
@@ -218,10 +217,7 @@ private:
   template <typename F, typename = typename result_of<F(const T&)>::type>
   const Future<T>& onReady(F&& f, Prefer) const
   {
-    return onReady(std::function<void(const T&)>(
-        [=](const T& t) mutable {
-          f(t);
-        }));
+    return onReady(ReadyCallback([=](const T& t) mutable { f(t); }));
   }
 
   // This is the less preferred `onReady`, we prefer the `onReady` method which
@@ -239,19 +235,14 @@ private:
           F>::type()>::type>
   const Future<T>& onReady(F&& f, LessPrefer) const
   {
-    return onReady(std::function<void(const T&)>(
-        [=](const T&) mutable {
-          f();
-        }));
+    return onReady(ReadyCallback([=](const T&) mutable { f(); }));
   }
 
   template <typename F, typename = typename result_of<F(const std::string&)>::type> // NOLINT(whitespace/line_length)
   const Future<T>& onFailed(F&& f, Prefer) const
   {
-    return onFailed(std::function<void(const std::string&)>(
-        [=](const std::string& message) mutable {
-          f(message);
-        }));
+    return onFailed(FailedCallback(
+        [=](const std::string& message) mutable { f(message); }));
   }
 
   // Refer to the less preferred version of `onReady` for why these SFINAE
@@ -263,19 +254,14 @@ private:
           F>::type()>::type>
   const Future<T>& onFailed(F&& f, LessPrefer) const
   {
-    return onFailed(std::function<void(const std::string&)>(
-        [=](const std::string&) mutable {
-          f();
-        }));
+    return onFailed(FailedCallback([=](const std::string&) mutable { f(); }));
   }
 
   template <typename F, typename = typename result_of<F(const Future<T>&)>::type> // NOLINT(whitespace/line_length)
   const Future<T>& onAny(F&& f, Prefer) const
   {
-    return onAny(std::function<void(const Future<T>&)>(
-        [=](const Future<T>& future) mutable {
-          f(future);
-        }));
+    return onAny(
+        AnyCallback([=](const Future<T>& future) mutable { f(future); }));
   }
 
   // Refer to the less preferred version of `onReady` for why these SFINAE
@@ -287,20 +273,14 @@ private:
           F>::type()>::type>
   const Future<T>& onAny(F&& f, LessPrefer) const
   {
-    return onAny(std::function<void(const Future<T>&)>(
-        [=](const Future<T>&) mutable {
-          f();
-        }));
+    return onAny(AnyCallback([=](const Future<T>&) mutable { f(); }));
   }
 
 public:
   template <typename F>
   const Future<T>& onDiscard(F&& f) const
   {
-    return onDiscard(std::function<void()>(
-        [=]() mutable {
-          f();
-        }));
+    return onDiscard(DiscardCallback([=]() mutable { f(); }));
   }
 
   template <typename F>
@@ -318,10 +298,7 @@ public:
   template <typename F>
   const Future<T>& onDiscarded(F&& f) const
   {
-    return onDiscarded(std::function<void()>(
-        [=]() mutable {
-          f();
-        }));
+    return onDiscarded(DiscardedCallback([=]() mutable { f(); }));
   }
 
   template <typename F>
@@ -360,7 +337,7 @@ private:
   {
     // note the then<X> is necessary to not have an infinite loop with
     // then(F&& f)
-    return then<X>(f.operator std::function<Future<X>(const T&)>());
+    return then<X>(std::function<Future<X>(const T&)>(std::move(f)));
   }
 
   // Refer to the less preferred version of `onReady` for why these SFINAE
@@ -373,7 +350,7 @@ private:
               F>::type()>::type>::type>
   Future<X> then(_Deferred<F>&& f, LessPrefer) const
   {
-    return then<X>(f.operator std::function<Future<X>()>());
+    return then<X>(std::function<Future<X>()>(std::move(f)));
   }
 
   template <typename F, typename X = typename internal::unwrap<typename result_of<F(const T&)>::type>::type> // NOLINT(whitespace/line_length)
