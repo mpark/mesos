@@ -33,6 +33,13 @@ namespace process {
 template <typename F>
 struct _Deferred
 {
+  // We have the function<R(Args...) because we have situations like this:
+  //  f.after(defer([]() -> Future<T> { return Failure(...); }), timeout);
+  //
+  // auto d = defer([]() { return Failure(...); });
+  // decltype(function<Future<T>()>(d)()) == Future<T>
+
+  // after(function<Future<T>()>, timeout)
   template <typename R, typename... Args>
   operator std::function<R(Args...)>() &&
   {

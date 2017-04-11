@@ -41,6 +41,8 @@ private:
   };
 
 public:
+  // The use of `std::bind` is necessary, as `defer` supports passing
+  // placeholders as arguments that can later be filled in.
   template <typename T, typename F, typename... Args>
   static auto defer(const PID<T>& pid, F T::*method, Args&&... args)
     -> _Deferred<decltype(
